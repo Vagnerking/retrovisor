@@ -45,7 +45,7 @@ python app.py --camera-index 0 --width 420 --height 240 --margin 20 --fps 24 --r
 - `--reference-image`: foto de referência principal.
 - `--reference-dir`: pasta com várias imagens de referência (pode repetir esse parâmetro).
 - `--similarity-threshold`: nível de semelhança para disparar o alarme (`0.5` = 50%).
-- `--match-distance-threshold`: limite de distância do LBPH (menor = mais rigoroso, padrão `65`).
+- `--match-distance-threshold`: escala usada para converter a distância LBPH em porcentagem de similaridade (padrão `120`).
 
 ## Funcionamento do alarme
 
@@ -108,4 +108,5 @@ dist\VigiaWebcam.exe
 - Use fotos de referência frontais e bem iluminadas para melhorar a detecção.
 - Se a webcam não abrir, feche apps que já estejam usando câmera (Zoom, Teams, OBS etc.).
 - O reconhecimento foi melhorado com LBPH (OpenCV Contrib), mas ainda pode ter falsos positivos/negativos em iluminação ruim ou ângulos extremos.
-- Se estiver detectando demais, diminua `--match-distance-threshold` (ex.: `55`). Se estiver muito rígido, aumente (ex.: `75`).
+- Se a porcentagem estiver sempre muito baixa (ex.: 0% com pessoa conhecida), aumente `--match-distance-threshold` (ex.: `140` ou `180`).
+- Se estiver detectando pessoas erradas com facilidade, diminua `--match-distance-threshold` (ex.: `90`).

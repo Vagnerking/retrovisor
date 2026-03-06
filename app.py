@@ -1,4 +1,5 @@
 import argparse
+import math
 import os
 import sys
 
@@ -72,6 +73,7 @@ class WebcamOverlayApp:
         self.delay = max(1, int(1000 / max(1, fps)))
         self.similarity_threshold = similarity_threshold
         self.match_distance_threshold = max(1.0, match_distance_threshold)
+        self.distance_exponential_scale = self.match_distance_threshold
 
         self.face_detector = self.cv2.CascadeClassifier(
             self.cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
@@ -376,7 +378,9 @@ class WebcamOverlayApp:
         if predicted_label != self.TARGET_LABEL:
             return 0.0, distance
 
-        similarity = 1.0 - (distance / self.match_distance_threshold)
+        # Conversão mais suave de distância->similaridade para evitar "0%" constante.
+        # Distância menor = rosto mais parecido.
+        similarity = math.exp(-distance / self.distance_exponential_scale)
         similarity = max(0.0, min(1.0, similarity))
         return similarity, distance
 
@@ -494,8 +498,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--match-distance-threshold",
         type=float,
-        default=65.0,
-        help="Limite de distância LBPH (quanto menor, mais rigoroso). Padrão: 65.",
+        default=120.0,
+        help="Escala de distância LBPH usada na conversão de similaridade (padrão: 120).",
     )
     return parser.parse_args()
 
