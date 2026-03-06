@@ -6,7 +6,7 @@ Aplicativo em Python para deixar a webcam **sempre visível no canto superior di
 
 - Python 3.10+
 - Webcam funcionando
-- Foto de referência da pessoa que deve disparar o alarme (ex.: `referencia.jpg`)
+- Foto(s) de referência da pessoa que deve disparar o alarme
 
 ## Instalação
 
@@ -22,17 +22,26 @@ pip install -r requirements.txt
 python app.py --reference-image referencia.jpg
 ```
 
+### Várias pastas de referência
+
+Você pode passar várias pastas para o app carregar **todas as imagens** dessas pastas (`.jpg/.jpeg/.png/.bmp`):
+
+```bash
+python app.py --reference-dir refs_casa --reference-dir refs_trabalho --similarity-threshold 0.5
+```
+
 ### Opções úteis
 
 ```bash
-python app.py --camera-index 0 --width 420 --height 240 --margin 20 --fps 24 --reference-image referencia.jpg --similarity-threshold 0.5
+python app.py --camera-index 0 --width 420 --height 240 --margin 20 --fps 24 --reference-image referencia.jpg --reference-dir minhas_referencias --similarity-threshold 0.5
 ```
 
 - `--camera-index`: troque para `1`, `2`, etc. caso tenha mais de uma câmera.
 - `--width` e `--height`: tamanho da janela.
 - `--margin`: distância do topo e da direita.
 - `--fps`: velocidade de atualização.
-- `--reference-image`: foto usada como referência para comparação facial.
+- `--reference-image`: foto de referência principal.
+- `--reference-dir`: pasta com várias imagens de referência (pode repetir esse parâmetro).
 - `--similarity-threshold`: nível de semelhança para disparar o alarme (`0.5` = 50%).
 
 ## Funcionamento do alarme
@@ -42,13 +51,17 @@ python app.py --camera-index 0 --width 420 --height 240 --margin 20 --fps 24 --r
 - Durante a pausa, o alarme não toca.
 - Após os 30 segundos, se o rosto for detectado novamente acima do limite, o alarme volta a tocar.
 
+## Carregar referências em tempo real
+
+- **Selecionar foto**: substitui as referências atuais por uma foto escolhida.
+- **Adicionar pasta**: adiciona todas as imagens válidas da pasta às referências já carregadas.
+
 ## Foto de referência no `.exe`
 
-- O app tenta localizar a foto de referência em:
+- O app tenta localizar arquivos relativos em:
   1. pasta atual,
   2. pasta do script/executável.
-- Se o arquivo não existir, o app **não fecha**: ele abre normalmente e mostra aviso para usar o botão **"Selecionar foto"**.
-- Você pode escolher uma imagem `.jpg/.jpeg/.png/.bmp` em tempo de execução.
+- Se não encontrar referências válidas, o app **não fecha**: ele abre normalmente e mostra aviso.
 
 ## Gerar `.exe` no Windows
 
@@ -74,6 +87,6 @@ dist\VigiaWebcam.exe
 
 ## Dicas
 
-- Use uma foto de referência frontal e bem iluminada para melhorar a detecção.
+- Use fotos de referência frontais e bem iluminadas para melhorar a detecção.
 - Se a webcam não abrir, feche apps que já estejam usando câmera (Zoom, Teams, OBS etc.).
 - Esta detecção usa comparação simples por OpenCV, então pode haver falsos positivos/negativos em ambientes difíceis.

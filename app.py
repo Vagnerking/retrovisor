@@ -46,6 +46,7 @@ class WebcamOverlayApp:
         margin: int,
         fps: int,
         reference_image: str,
+        reference_dirs: list[str],
         similarity_threshold: float,
     ) -> None:
         import cv2
@@ -71,8 +72,8 @@ class WebcamOverlayApp:
         self.alarm = AlarmPlayer()
         self.alarm_muted_until = 0.0
         self.alarm_active = False
-        self.reference_face = None
-        self.reference_image_path: str | None = None
+        self.reference_faces: list = []
+        self.reference_image_paths: list[str] = []
 
         self.cap = self.cv2.VideoCapture(self.camera_index)
         if not self.cap.isOpened():
@@ -110,6 +111,20 @@ class WebcamOverlayApp:
         )
         status_label.pack(side="left", fill="x", expand=True)
 
+        self.select_reference_folder_button = tk.Button(
+            controls,
+            text="Adicionar pasta",
+            command=self.select_reference_folder,
+            bg="#1E5D3A",
+            fg="white",
+            activebackground="#2C7A4E",
+            activeforeground="white",
+            relief="flat",
+            padx=8,
+            pady=5,
+        )
+        self.select_reference_folder_button.pack(side="right", padx=(0, 8), pady=6)
+
         self.select_reference_button = tk.Button(
             controls,
             text="Selecionar foto",
@@ -141,75 +156,122 @@ class WebcamOverlayApp:
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
         self.root.bind("<Escape>", lambda _event: self.on_close())
 
-        loaded, error = self.set_reference_image(reference_image)
-        if not loaded:
-            self.status_var.set("Sem referência: clique em 'Selecionar foto'")
-            if error:
+        loaded_count, errors = self.set_reference_sources(reference_image, reference_dirs)
+        if loaded_count == 0:
+            self.status_var.set("Sem referência: use 'Selecionar foto' ou 'Adicionar pasta'")
+            if errors:
                 messagebox.showwarning(
-                    "Foto de referência não carregada",
-                    (
-                        f"{error}\n\n"
-                        "A webcam continuará aberta. Clique em 'Selecionar foto' para configurar a referência."
-                    ),
+                    "Referências não carregadas",
+                    "\n".join(errors[:4]),
                 )
 
         self.update_frame()
 
-    def _resolve_reference_image_path(self, image_path: str) -> str:
-        if os.path.isabs(image_path):
-            return image_path
+    def _resolve_reference_path(self, path_value: str) -> str:
+        if os.path.isabs(path_value):
+            return path_value
 
         candidates = [
-            os.path.join(os.getcwd(), image_path),
-            os.path.join(os.path.dirname(os.path.abspath(sys.argv[0])), image_path),
-            os.path.join(os.path.dirname(os.path.abspath(sys.executable)), image_path),
+            os.path.join(os.getcwd(), path_value),
+            os.path.join(os.path.dirname(os.path.abspath(sys.argv[0])), path_value),
+            os.path.join(os.path.dirname(os.path.abspath(sys.executable)), path_value),
         ]
 
         for candidate in candidates:
             if os.path.exists(candidate):
                 return candidate
 
-        return os.path.join(os.getcwd(), image_path)
+        return os.path.join(os.getcwd(), path_value)
 
-    def _load_reference_face(self, image_path: str):
-        resolved_path = self._resolve_reference_image_path(image_path)
-        if not os.path.exists(resolved_path):
-            raise RuntimeError(
-                f"Imagem de referência não encontrada: {image_path}."
-            )
-
-        reference = self.cv2.imread(resolved_path)
+    def _extract_face_from_image(self, image_path: str):
+        reference = self.cv2.imread(image_path)
         if reference is None:
-            raise RuntimeError(
-                f"Não foi possível abrir a imagem de referência: {resolved_path}."
-            )
+            raise RuntimeError(f"Não foi possível abrir a imagem de referência: {image_path}.")
 
         gray = self.cv2.cvtColor(reference, self.cv2.COLOR_BGR2GRAY)
         faces = self.face_detector.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5)
         if len(faces) == 0:
             raise RuntimeError(
-                "A imagem de referência não possui um rosto detectável. "
-                "Use uma foto frontal e bem iluminada."
+                f"A imagem '{os.path.basename(image_path)}' não possui um rosto detectável."
             )
 
         x, y, w, h = max(faces, key=lambda rect: rect[2] * rect[3])
         face = gray[y : y + h, x : x + w]
-        return self.cv2.resize(face, (100, 100), interpolation=self.cv2.INTER_AREA), resolved_path
+        return self.cv2.resize(face, (100, 100), interpolation=self.cv2.INTER_AREA)
 
-    def set_reference_image(self, image_path: str) -> tuple[bool, str | None]:
+    def _collect_images_from_dir(self, dir_path: str) -> list[str]:
+        if not os.path.isdir(dir_path):
+            raise RuntimeError(f"Pasta de referência não encontrada: {dir_path}")
+
+        allowed_ext = {".jpg", ".jpeg", ".png", ".bmp"}
+        files = []
+        for name in sorted(os.listdir(dir_path)):
+            ext = os.path.splitext(name)[1].lower()
+            if ext in allowed_ext:
+                files.append(os.path.join(dir_path, name))
+
+        if not files:
+            raise RuntimeError(f"A pasta '{dir_path}' não possui imagens compatíveis.")
+
+        return files
+
+    def _load_references_from_image(self, image_path: str) -> tuple[list, list[str], list[str]]:
+        resolved_path = self._resolve_reference_path(image_path)
+        if not os.path.exists(resolved_path):
+            return [], [], [f"Imagem de referência não encontrada: {image_path}."]
+
         try:
-            face, resolved_path = self._load_reference_face(image_path)
+            face = self._extract_face_from_image(resolved_path)
+            return [face], [resolved_path], []
         except RuntimeError as error:
-            self.reference_face = None
-            self.reference_image_path = None
-            self.alarm.stop()
-            self.alarm_active = False
-            return False, str(error)
+            return [], [], [str(error)]
 
-        self.reference_face = face
-        self.reference_image_path = resolved_path
-        self.status_var.set("Referência carregada. Monitorando...")
-        return True, None
+    def _load_references_from_directory(self, dir_path: str) -> tuple[list, list[str], list[str]]:
+        resolved_dir = self._resolve_reference_path(dir_path)
+        try:
+            image_paths = self._collect_images_from_dir(resolved_dir)
+        except RuntimeError as error:
+            return [], [], [str(error)]
+
+        faces = []
+        loaded_paths = []
+        errors = []
+        for path in image_paths:
+            try:
+                faces.append(self._extract_face_from_image(path))
+                loaded_paths.append(path)
+            except RuntimeError as error:
+                errors.append(str(error))
+
+        if not faces:
+            errors.append(f"Nenhuma imagem válida com rosto foi carregada em: {resolved_dir}")
+
+        return faces, loaded_paths, errors
+
+    def set_reference_sources(self, reference_image: str, reference_dirs: list[str]) -> tuple[int, list[str]]:
+        self.reference_faces = []
+        self.reference_image_paths = []
+
+        all_errors = []
+        if reference_image:
+            faces, paths, errors = self._load_references_from_image(reference_image)
+            self.reference_faces.extend(faces)
+            self.reference_image_paths.extend(paths)
+            all_errors.extend(errors)
+
+        for dir_value in reference_dirs:
+            faces, paths, errors = self._load_references_from_directory(dir_value)
+            self.reference_faces.extend(faces)
+            self.reference_image_paths.extend(paths)
+            all_errors.extend(errors)
+
+        if self.reference_faces:
+            self.status_var.set(f"{len(self.reference_faces)} referência(s) carregada(s).")
+            return len(self.reference_faces), all_errors
+
+        self.alarm.stop()
+        self.alarm_active = False
+        return 0, all_errors
 
     def select_reference_image(self) -> None:
         selected_path = filedialog.askopenfilename(
@@ -222,21 +284,39 @@ class WebcamOverlayApp:
         if not selected_path:
             return
 
-        loaded, error = self.set_reference_image(selected_path)
-        if loaded:
-            self.status_var.set("Referência atualizada. Monitorando...")
-        elif error:
-            messagebox.showerror("Erro na foto de referência", error)
+        loaded, errors = self.set_reference_sources(selected_path, [])
+        if loaded > 0:
+            self.status_var.set(f"Referência atualizada ({loaded}). Monitorando...")
+        elif errors:
+            messagebox.showerror("Erro na foto de referência", "\n".join(errors[:3]))
 
-    def _calculate_similarity(self, face_roi_gray) -> float:
+    def select_reference_folder(self) -> None:
+        selected_dir = filedialog.askdirectory(title="Selecione a pasta com imagens de referência")
+        if not selected_dir:
+            return
+
+        faces, paths, errors = self._load_references_from_directory(selected_dir)
+        self.reference_faces.extend(faces)
+        self.reference_image_paths.extend(paths)
+
+        if self.reference_faces:
+            self.status_var.set(f"{len(self.reference_faces)} referência(s) carregada(s).")
+
+        if errors and not faces:
+            messagebox.showerror("Erro na pasta de referência", "\n".join(errors[:3]))
+
+    def _calculate_best_similarity(self, face_roi_gray) -> float:
+        if not self.reference_faces:
+            return 0.0
+
         candidate = self.cv2.resize(face_roi_gray, (100, 100), interpolation=self.cv2.INTER_AREA)
-        result = self.cv2.matchTemplate(
-            candidate,
-            self.reference_face,
-            self.cv2.TM_CCOEFF_NORMED,
-        )
-        similarity = float(result[0][0])
-        return max(0.0, min(1.0, similarity))
+        best = 0.0
+        for reference_face in self.reference_faces:
+            result = self.cv2.matchTemplate(candidate, reference_face, self.cv2.TM_CCOEFF_NORMED)
+            similarity = float(result[0][0])
+            similarity = max(0.0, min(1.0, similarity))
+            best = max(best, similarity)
+        return best
 
     def mute_alarm_for_30s(self) -> None:
         self.alarm_muted_until = time.time() + 30
@@ -250,7 +330,7 @@ class WebcamOverlayApp:
             frame = self.cv2.resize(frame, (self.width, self.height), interpolation=self.cv2.INTER_AREA)
             gray = self.cv2.cvtColor(frame, self.cv2.COLOR_BGR2GRAY)
 
-            if self.reference_face is None:
+            if not self.reference_faces:
                 self.alarm.stop()
                 self.alarm_active = False
                 self.cv2.putText(
@@ -267,7 +347,7 @@ class WebcamOverlayApp:
                 best_similarity = 0.0
                 for (x, y, w, h) in faces:
                     roi_gray = gray[y : y + h, x : x + w]
-                    similarity = self._calculate_similarity(roi_gray)
+                    similarity = self._calculate_best_similarity(roi_gray)
                     best_similarity = max(best_similarity, similarity)
 
                     color = (0, 0, 255) if similarity >= self.similarity_threshold else (255, 160, 0)
@@ -299,7 +379,7 @@ class WebcamOverlayApp:
                         remaining = int(self.alarm_muted_until - now)
                         self.status_var.set(f"Alarme pausado ({remaining}s)")
                     else:
-                        self.status_var.set("Monitorando...")
+                        self.status_var.set(f"Monitorando ({len(self.reference_faces)} referência(s))...")
 
             frame = self.cv2.cvtColor(frame, self.cv2.COLOR_BGR2RGB)
             image = self.Image.fromarray(frame)
@@ -334,7 +414,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--reference-image",
         default="referencia.jpg",
-        help="Caminho da foto de referência da pessoa que deve disparar o alarme (padrão: referencia.jpg).",
+        help="Caminho da foto de referência principal (padrão: referencia.jpg).",
+    )
+    parser.add_argument(
+        "--reference-dir",
+        action="append",
+        default=[],
+        help="Pasta com imagens de referência (.jpg/.jpeg/.png/.bmp). Pode repetir o parâmetro.",
     )
     parser.add_argument(
         "--similarity-threshold",
@@ -356,6 +442,7 @@ def main() -> int:
             margin=args.margin,
             fps=args.fps,
             reference_image=args.reference_image,
+            reference_dirs=args.reference_dir,
             similarity_threshold=max(0.0, min(1.0, args.similarity_threshold)),
         )
         app.run()
