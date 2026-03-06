@@ -51,6 +51,19 @@ python app.py --camera-index 0 --width 420 --height 240 --margin 20 --fps 24 --r
 - Durante a pausa, o alarme não toca.
 - Após os 30 segundos, se o rosto for detectado novamente acima do limite, o alarme volta a tocar.
 
+
+## Pasta padrão para suas fotos
+
+- Criei a pasta `referencias_alvo/` no projeto para você colocar as fotos dele.
+- O script `start_vigia_com_pasta_refs.bat` já inicia o app lendo automaticamente essa pasta.
+- Formatos aceitos: `.jpg`, `.jpeg`, `.png`, `.bmp`.
+
+Exemplo de uso no Windows:
+
+```bat
+start_vigia_com_pasta_refs.bat
+```
+
 ## Carregar referências em tempo real
 
 - **Selecionar foto**: substitui as referências atuais por uma foto escolhida.
