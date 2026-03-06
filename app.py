@@ -168,6 +168,7 @@ class WebcamOverlayApp:
         self.root.bind("<Escape>", lambda _event: self.on_close())
 
         loaded_count, errors = self.set_reference_sources(reference_image, reference_dirs)
+        self._log_loaded_references()
         if loaded_count == 0:
             self.status_var.set("Sem referência: use 'Selecionar foto' ou 'Adicionar pasta'")
             if errors:
@@ -212,11 +213,16 @@ class WebcamOverlayApp:
         )
 
     def _extract_face_from_image(self, image_path: str):
-        reference = self.cv2.imread(image_path)
+        reference = self.cv2.imread(image_path, self.cv2.IMREAD_UNCHANGED)
         if reference is None:
             raise RuntimeError(f"Não foi possível abrir a imagem de referência: {image_path}.")
 
-        gray = self.cv2.cvtColor(reference, self.cv2.COLOR_BGR2GRAY)
+        if len(reference.shape) == 2:
+            gray = reference
+        else:
+            if reference.shape[2] == 4:
+                reference = self.cv2.cvtColor(reference, self.cv2.COLOR_BGRA2BGR)
+            gray = self.cv2.cvtColor(reference, self.cv2.COLOR_BGR2GRAY)
         faces = self._detect_faces(gray)
         if len(faces) == 0:
             raise RuntimeError(f"A imagem '{os.path.basename(image_path)}' não possui rosto detectável.")
@@ -290,6 +296,16 @@ class WebcamOverlayApp:
         self.recognizer = self._create_recognizer()
         self.recognizer.train(self.reference_faces_data, labels)
 
+
+    def _log_loaded_references(self) -> None:
+        if not self.reference_image_paths:
+            print("[Vigia] Nenhuma referência de imagem carregada na inicialização.", flush=True)
+            return
+
+        print("[Vigia] Referências carregadas na inicialização:", flush=True)
+        for idx, path in enumerate(self.reference_image_paths, start=1):
+            print(f"  {idx:02d}. {path}", flush=True)
+
     def set_reference_sources(self, reference_image: str, reference_dirs: list[str]) -> tuple[int, list[str]]:
         all_faces = []
         all_paths = []
@@ -327,6 +343,7 @@ class WebcamOverlayApp:
 
         loaded, errors = self.set_reference_sources(selected_path, [])
         if loaded > 0:
+            self._log_loaded_references()
             self.status_var.set(f"Referência atualizada ({loaded}). Monitorando...")
         elif errors:
             messagebox.showerror("Erro na foto de referência", "\n".join(errors[:3]))
@@ -342,6 +359,7 @@ class WebcamOverlayApp:
 
         if faces:
             self._set_reference_dataset(merged_faces, merged_paths)
+            self._log_loaded_references()
             self.status_var.set(f"{len(self.reference_faces_data)} referência(s) carregada(s).")
 
         if errors and not faces:

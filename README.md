@@ -59,13 +59,15 @@ python app.py --camera-index 0 --width 420 --height 240 --margin 20 --fps 24 --r
 
 - Criei a pasta `referencias_alvo/` no projeto para você colocar as fotos dele.
 - O script `start_vigia_com_pasta_refs.bat` já inicia o app lendo automaticamente essa pasta.
-- Formatos aceitos: `.jpg`, `.jpeg`, `.png`, `.bmp`.
+- Formatos aceitos: `.jpg`, `.jpeg`, `.png`, `.bmp` (incluindo PNG com transparência/alpha).
 
 Exemplo de uso no Windows:
 
 ```bat
 start_vigia_com_pasta_refs.bat
 ```
+
+Ao iniciar o app, ele mostra no terminal o log das referências carregadas (caminho completo de cada arquivo).
 
 ## Carregar referências em tempo real
 
