@@ -1,8 +1,14 @@
 import argparse
 import os
 import sys
+
 import threading
 import time
+
+try:
+    import numpy as np
+except ModuleNotFoundError:
+    np = None
 import tkinter as tk
 from tkinter import filedialog, messagebox
 
@@ -38,6 +44,8 @@ class AlarmPlayer:
 
 
 class WebcamOverlayApp:
+    TARGET_LABEL = 1
+
     def __init__(
         self,
         camera_index: int,
@@ -48,6 +56,7 @@ class WebcamOverlayApp:
         reference_image: str,
         reference_dirs: list[str],
         similarity_threshold: float,
+        match_distance_threshold: float,
     ) -> None:
         import cv2
         from PIL import Image, ImageTk
@@ -62,6 +71,7 @@ class WebcamOverlayApp:
         self.margin = margin
         self.delay = max(1, int(1000 / max(1, fps)))
         self.similarity_threshold = similarity_threshold
+        self.match_distance_threshold = max(1.0, match_distance_threshold)
 
         self.face_detector = self.cv2.CascadeClassifier(
             self.cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
@@ -69,11 +79,13 @@ class WebcamOverlayApp:
         if self.face_detector.empty():
             raise RuntimeError("Não foi possível carregar o detector de rosto do OpenCV.")
 
+        self.recognizer = self._create_recognizer()
+        self.reference_faces_data: list = []
+        self.reference_image_paths: list[str] = []
+
         self.alarm = AlarmPlayer()
         self.alarm_muted_until = 0.0
         self.alarm_active = False
-        self.reference_faces: list = []
-        self.reference_image_paths: list[str] = []
 
         self.cap = self.cv2.VideoCapture(self.camera_index)
         if not self.cap.isOpened():
@@ -90,7 +102,6 @@ class WebcamOverlayApp:
         screen_width = self.root.winfo_screenwidth()
         x = max(0, screen_width - self.width - self.margin)
         y = max(0, self.margin)
-
         self.root.geometry(f"{self.width}x{self.height}+{x}+{y}")
         self.root.configure(bg="black")
 
@@ -111,7 +122,7 @@ class WebcamOverlayApp:
         )
         status_label.pack(side="left", fill="x", expand=True)
 
-        self.select_reference_folder_button = tk.Button(
+        add_folder_button = tk.Button(
             controls,
             text="Adicionar pasta",
             command=self.select_reference_folder,
@@ -123,9 +134,9 @@ class WebcamOverlayApp:
             padx=8,
             pady=5,
         )
-        self.select_reference_folder_button.pack(side="right", padx=(0, 8), pady=6)
+        add_folder_button.pack(side="right", padx=(0, 8), pady=6)
 
-        self.select_reference_button = tk.Button(
+        select_photo_button = tk.Button(
             controls,
             text="Selecionar foto",
             command=self.select_reference_image,
@@ -137,7 +148,7 @@ class WebcamOverlayApp:
             padx=8,
             pady=5,
         )
-        self.select_reference_button.pack(side="right", padx=(0, 8), pady=6)
+        select_photo_button.pack(side="right", padx=(0, 8), pady=6)
 
         mute_button = tk.Button(
             controls,
@@ -160,12 +171,16 @@ class WebcamOverlayApp:
         if loaded_count == 0:
             self.status_var.set("Sem referência: use 'Selecionar foto' ou 'Adicionar pasta'")
             if errors:
-                messagebox.showwarning(
-                    "Referências não carregadas",
-                    "\n".join(errors[:4]),
-                )
+                messagebox.showwarning("Referências não carregadas", "\n".join(errors[:4]))
 
         self.update_frame()
+
+    def _create_recognizer(self):
+        if not hasattr(self.cv2, "face") or not hasattr(self.cv2.face, "LBPHFaceRecognizer_create"):
+            raise RuntimeError(
+                "Reconhecimento LBPH indisponível. Instale: pip install opencv-contrib-python"
+            )
+        return self.cv2.face.LBPHFaceRecognizer_create(radius=1, neighbors=8, grid_x=8, grid_y=8)
 
     def _resolve_reference_path(self, path_value: str) -> str:
         if os.path.isabs(path_value):
@@ -183,21 +198,32 @@ class WebcamOverlayApp:
 
         return os.path.join(os.getcwd(), path_value)
 
+    def _normalize_face(self, gray_face):
+        normalized = self.cv2.resize(gray_face, (160, 160), interpolation=self.cv2.INTER_AREA)
+        normalized = self.cv2.equalizeHist(normalized)
+        return normalized
+
+    def _detect_faces(self, gray_frame):
+        return self.face_detector.detectMultiScale(
+            gray_frame,
+            scaleFactor=1.08,
+            minNeighbors=6,
+            minSize=(40, 40),
+        )
+
     def _extract_face_from_image(self, image_path: str):
         reference = self.cv2.imread(image_path)
         if reference is None:
             raise RuntimeError(f"Não foi possível abrir a imagem de referência: {image_path}.")
 
         gray = self.cv2.cvtColor(reference, self.cv2.COLOR_BGR2GRAY)
-        faces = self.face_detector.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5)
+        faces = self._detect_faces(gray)
         if len(faces) == 0:
-            raise RuntimeError(
-                f"A imagem '{os.path.basename(image_path)}' não possui um rosto detectável."
-            )
+            raise RuntimeError(f"A imagem '{os.path.basename(image_path)}' não possui rosto detectável.")
 
         x, y, w, h = max(faces, key=lambda rect: rect[2] * rect[3])
         face = gray[y : y + h, x : x + w]
-        return self.cv2.resize(face, (100, 100), interpolation=self.cv2.INTER_AREA)
+        return self._normalize_face(face)
 
     def _collect_images_from_dir(self, dir_path: str) -> list[str]:
         if not os.path.isdir(dir_path):
@@ -248,29 +274,44 @@ class WebcamOverlayApp:
 
         return faces, loaded_paths, errors
 
-    def set_reference_sources(self, reference_image: str, reference_dirs: list[str]) -> tuple[int, list[str]]:
-        self.reference_faces = []
-        self.reference_image_paths = []
+    def _set_reference_dataset(self, faces_data: list, image_paths: list[str]) -> None:
+        self.reference_faces_data = faces_data
+        self.reference_image_paths = image_paths
 
+        if not self.reference_faces_data:
+            self.alarm.stop()
+            self.alarm_active = False
+            self.recognizer = self._create_recognizer()
+            return
+
+        labels = [self.TARGET_LABEL] * len(self.reference_faces_data)
+        if np is not None:
+            labels = np.array(labels, dtype="int32")
+        self.recognizer = self._create_recognizer()
+        self.recognizer.train(self.reference_faces_data, labels)
+
+    def set_reference_sources(self, reference_image: str, reference_dirs: list[str]) -> tuple[int, list[str]]:
+        all_faces = []
+        all_paths = []
         all_errors = []
+
         if reference_image:
             faces, paths, errors = self._load_references_from_image(reference_image)
-            self.reference_faces.extend(faces)
-            self.reference_image_paths.extend(paths)
+            all_faces.extend(faces)
+            all_paths.extend(paths)
             all_errors.extend(errors)
 
         for dir_value in reference_dirs:
             faces, paths, errors = self._load_references_from_directory(dir_value)
-            self.reference_faces.extend(faces)
-            self.reference_image_paths.extend(paths)
+            all_faces.extend(faces)
+            all_paths.extend(paths)
             all_errors.extend(errors)
 
-        if self.reference_faces:
-            self.status_var.set(f"{len(self.reference_faces)} referência(s) carregada(s).")
-            return len(self.reference_faces), all_errors
+        self._set_reference_dataset(all_faces, all_paths)
+        if self.reference_faces_data:
+            self.status_var.set(f"{len(self.reference_faces_data)} referência(s) carregada(s).")
+            return len(self.reference_faces_data), all_errors
 
-        self.alarm.stop()
-        self.alarm_active = False
         return 0, all_errors
 
     def select_reference_image(self) -> None:
@@ -296,27 +337,30 @@ class WebcamOverlayApp:
             return
 
         faces, paths, errors = self._load_references_from_directory(selected_dir)
-        self.reference_faces.extend(faces)
-        self.reference_image_paths.extend(paths)
+        merged_faces = self.reference_faces_data + faces
+        merged_paths = self.reference_image_paths + paths
 
-        if self.reference_faces:
-            self.status_var.set(f"{len(self.reference_faces)} referência(s) carregada(s).")
+        if faces:
+            self._set_reference_dataset(merged_faces, merged_paths)
+            self.status_var.set(f"{len(self.reference_faces_data)} referência(s) carregada(s).")
 
         if errors and not faces:
             messagebox.showerror("Erro na pasta de referência", "\n".join(errors[:3]))
 
-    def _calculate_best_similarity(self, face_roi_gray) -> float:
-        if not self.reference_faces:
-            return 0.0
+    def _predict_similarity(self, face_roi_gray) -> tuple[float, float]:
+        if not self.reference_faces_data:
+            return 0.0, 9999.0
 
-        candidate = self.cv2.resize(face_roi_gray, (100, 100), interpolation=self.cv2.INTER_AREA)
-        best = 0.0
-        for reference_face in self.reference_faces:
-            result = self.cv2.matchTemplate(candidate, reference_face, self.cv2.TM_CCOEFF_NORMED)
-            similarity = float(result[0][0])
-            similarity = max(0.0, min(1.0, similarity))
-            best = max(best, similarity)
-        return best
+        normalized = self._normalize_face(face_roi_gray)
+        predicted_label, distance = self.recognizer.predict(normalized)
+        distance = float(distance)
+
+        if predicted_label != self.TARGET_LABEL:
+            return 0.0, distance
+
+        similarity = 1.0 - (distance / self.match_distance_threshold)
+        similarity = max(0.0, min(1.0, similarity))
+        return similarity, distance
 
     def mute_alarm_for_30s(self) -> None:
         self.alarm_muted_until = time.time() + 30
@@ -330,7 +374,7 @@ class WebcamOverlayApp:
             frame = self.cv2.resize(frame, (self.width, self.height), interpolation=self.cv2.INTER_AREA)
             gray = self.cv2.cvtColor(frame, self.cv2.COLOR_BGR2GRAY)
 
-            if not self.reference_faces:
+            if not self.reference_faces_data:
                 self.alarm.stop()
                 self.alarm_active = False
                 self.cv2.putText(
@@ -343,21 +387,22 @@ class WebcamOverlayApp:
                     2,
                 )
             else:
-                faces = self.face_detector.detectMultiScale(gray, scaleFactor=1.15, minNeighbors=6)
+                faces = self._detect_faces(gray)
                 best_similarity = 0.0
+
                 for (x, y, w, h) in faces:
                     roi_gray = gray[y : y + h, x : x + w]
-                    similarity = self._calculate_best_similarity(roi_gray)
+                    similarity, distance = self._predict_similarity(roi_gray)
                     best_similarity = max(best_similarity, similarity)
 
                     color = (0, 0, 255) if similarity >= self.similarity_threshold else (255, 160, 0)
                     self.cv2.rectangle(frame, (x, y), (x + w, y + h), color, 2)
                     self.cv2.putText(
                         frame,
-                        f"{similarity * 100:.0f}%",
+                        f"{similarity * 100:.0f}% d={distance:.1f}",
                         (x, max(20, y - 8)),
                         self.cv2.FONT_HERSHEY_SIMPLEX,
-                        0.6,
+                        0.45,
                         color,
                         2,
                     )
@@ -379,7 +424,7 @@ class WebcamOverlayApp:
                         remaining = int(self.alarm_muted_until - now)
                         self.status_var.set(f"Alarme pausado ({remaining}s)")
                     else:
-                        self.status_var.set(f"Monitorando ({len(self.reference_faces)} referência(s))...")
+                        self.status_var.set(f"Monitorando ({len(self.reference_faces_data)} referência(s))...")
 
             frame = self.cv2.cvtColor(frame, self.cv2.COLOR_BGR2RGB)
             image = self.Image.fromarray(frame)
@@ -428,6 +473,12 @@ def parse_args() -> argparse.Namespace:
         default=0.5,
         help="Limiar de semelhança para disparar alarme (0.0 a 1.0, padrão: 0.5).",
     )
+    parser.add_argument(
+        "--match-distance-threshold",
+        type=float,
+        default=65.0,
+        help="Limite de distância LBPH (quanto menor, mais rigoroso). Padrão: 65.",
+    )
     return parser.parse_args()
 
 
@@ -444,6 +495,7 @@ def main() -> int:
             reference_image=args.reference_image,
             reference_dirs=args.reference_dir,
             similarity_threshold=max(0.0, min(1.0, args.similarity_threshold)),
+            match_distance_threshold=max(1.0, args.match_distance_threshold),
         )
         app.run()
     except ModuleNotFoundError as error:

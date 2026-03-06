@@ -2,6 +2,8 @@
 
 Aplicativo em Python para deixar a webcam **sempre visível no canto superior direito da tela**, com detecção facial e alarme.
 
+Agora o reconhecimento usa **LBPH (OpenCV Contrib)**, que fica mais estável quando há vários rostos na tela em comparação ao template matching simples.
+
 ## Requisitos
 
 - Python 3.10+
@@ -43,6 +45,7 @@ python app.py --camera-index 0 --width 420 --height 240 --margin 20 --fps 24 --r
 - `--reference-image`: foto de referência principal.
 - `--reference-dir`: pasta com várias imagens de referência (pode repetir esse parâmetro).
 - `--similarity-threshold`: nível de semelhança para disparar o alarme (`0.5` = 50%).
+- `--match-distance-threshold`: limite de distância do LBPH (menor = mais rigoroso, padrão `65`).
 
 ## Funcionamento do alarme
 
@@ -102,4 +105,5 @@ dist\VigiaWebcam.exe
 
 - Use fotos de referência frontais e bem iluminadas para melhorar a detecção.
 - Se a webcam não abrir, feche apps que já estejam usando câmera (Zoom, Teams, OBS etc.).
-- Esta detecção usa comparação simples por OpenCV, então pode haver falsos positivos/negativos em ambientes difíceis.
+- O reconhecimento foi melhorado com LBPH (OpenCV Contrib), mas ainda pode ter falsos positivos/negativos em iluminação ruim ou ângulos extremos.
+- Se estiver detectando demais, diminua `--match-distance-threshold` (ex.: `55`). Se estiver muito rígido, aumente (ex.: `75`).
