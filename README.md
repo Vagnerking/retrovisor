@@ -1,13 +1,12 @@
 # Vigia Webcam (Top Right)
 
-Aplicativo simples em Python para deixar a sua webcam **sempre visível no canto superior direito da tela**.
-
-Ideal para você ver quem está chegando por trás sem precisar virar toda hora.
+Aplicativo em Python para deixar a webcam **sempre visível no canto superior direito da tela**, com detecção facial e alarme.
 
 ## Requisitos
 
 - Python 3.10+
 - Webcam funcionando
+- Foto de referência da pessoa que deve disparar o alarme (ex.: `referencia.jpg`)
 
 ## Instalação
 
@@ -20,19 +19,28 @@ pip install -r requirements.txt
 ## Como executar
 
 ```bash
-python app.py
+python app.py --reference-image referencia.jpg
 ```
 
 ### Opções úteis
 
 ```bash
-python app.py --camera-index 0 --width 420 --height 240 --margin 20 --fps 24
+python app.py --camera-index 0 --width 420 --height 240 --margin 20 --fps 24 --reference-image referencia.jpg --similarity-threshold 0.5
 ```
 
 - `--camera-index`: troque para `1`, `2`, etc. caso tenha mais de uma câmera.
-- `--width` e `--height`: tamanho da janelinha.
+- `--width` e `--height`: tamanho da janela.
 - `--margin`: distância do topo e da direita.
 - `--fps`: velocidade de atualização.
+- `--reference-image`: foto usada como referência para comparação facial.
+- `--similarity-threshold`: nível de semelhança para disparar o alarme (`0.5` = 50%).
+
+## Funcionamento do alarme
+
+- Quando um rosto for detectado com semelhança igual ou maior que o limite configurado (padrão 50%), o alarme toca.
+- O botão **"Parar alarme (30s)"** pausa o alarme por 30 segundos.
+- Durante a pausa, o alarme não toca.
+- Após os 30 segundos, se o rosto for detectado novamente acima do limite, o alarme volta a tocar.
 
 ## Gerar `.exe` no Windows
 
@@ -58,5 +66,6 @@ dist\VigiaWebcam.exe
 
 ## Dicas
 
+- Use uma foto de referência frontal e bem iluminada para melhorar a detecção.
 - Se a webcam não abrir, feche apps que já estejam usando câmera (Zoom, Teams, OBS etc.).
-- No Linux, pode ser necessário conceder permissão de câmera ao ambiente gráfico.
+- Esta detecção usa comparação simples por OpenCV, então pode haver falsos positivos/negativos em ambientes difíceis.
