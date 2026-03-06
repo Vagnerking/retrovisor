@@ -42,6 +42,14 @@ python app.py --camera-index 0 --width 420 --height 240 --margin 20 --fps 24 --r
 - Durante a pausa, o alarme não toca.
 - Após os 30 segundos, se o rosto for detectado novamente acima do limite, o alarme volta a tocar.
 
+## Foto de referência no `.exe`
+
+- O app tenta localizar a foto de referência em:
+  1. pasta atual,
+  2. pasta do script/executável.
+- Se o arquivo não existir, o app **não fecha**: ele abre normalmente e mostra aviso para usar o botão **"Selecionar foto"**.
+- Você pode escolher uma imagem `.jpg/.jpeg/.png/.bmp` em tempo de execução.
+
 ## Gerar `.exe` no Windows
 
 No Windows, rode:

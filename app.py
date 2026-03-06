@@ -1,9 +1,10 @@
 import argparse
+import os
 import sys
 import threading
 import time
 import tkinter as tk
-from tkinter import messagebox
+from tkinter import filedialog, messagebox
 
 
 class AlarmPlayer:
@@ -67,10 +68,11 @@ class WebcamOverlayApp:
         if self.face_detector.empty():
             raise RuntimeError("Não foi possível carregar o detector de rosto do OpenCV.")
 
-        self.reference_face = self._load_reference_face(reference_image)
         self.alarm = AlarmPlayer()
         self.alarm_muted_until = 0.0
         self.alarm_active = False
+        self.reference_face = None
+        self.reference_image_path: str | None = None
 
         self.cap = self.cv2.VideoCapture(self.camera_index)
         if not self.cap.isOpened():
@@ -108,6 +110,20 @@ class WebcamOverlayApp:
         )
         status_label.pack(side="left", fill="x", expand=True)
 
+        self.select_reference_button = tk.Button(
+            controls,
+            text="Selecionar foto",
+            command=self.select_reference_image,
+            bg="#1C4D7A",
+            fg="white",
+            activebackground="#2A689F",
+            activeforeground="white",
+            relief="flat",
+            padx=8,
+            pady=5,
+        )
+        self.select_reference_button.pack(side="right", padx=(0, 8), pady=6)
+
         mute_button = tk.Button(
             controls,
             text="Parar alarme (30s)",
@@ -125,13 +141,47 @@ class WebcamOverlayApp:
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
         self.root.bind("<Escape>", lambda _event: self.on_close())
 
+        loaded, error = self.set_reference_image(reference_image)
+        if not loaded:
+            self.status_var.set("Sem referência: clique em 'Selecionar foto'")
+            if error:
+                messagebox.showwarning(
+                    "Foto de referência não carregada",
+                    (
+                        f"{error}\n\n"
+                        "A webcam continuará aberta. Clique em 'Selecionar foto' para configurar a referência."
+                    ),
+                )
+
         self.update_frame()
 
+    def _resolve_reference_image_path(self, image_path: str) -> str:
+        if os.path.isabs(image_path):
+            return image_path
+
+        candidates = [
+            os.path.join(os.getcwd(), image_path),
+            os.path.join(os.path.dirname(os.path.abspath(sys.argv[0])), image_path),
+            os.path.join(os.path.dirname(os.path.abspath(sys.executable)), image_path),
+        ]
+
+        for candidate in candidates:
+            if os.path.exists(candidate):
+                return candidate
+
+        return os.path.join(os.getcwd(), image_path)
+
     def _load_reference_face(self, image_path: str):
-        reference = self.cv2.imread(image_path)
+        resolved_path = self._resolve_reference_image_path(image_path)
+        if not os.path.exists(resolved_path):
+            raise RuntimeError(
+                f"Imagem de referência não encontrada: {image_path}."
+            )
+
+        reference = self.cv2.imread(resolved_path)
         if reference is None:
             raise RuntimeError(
-                f"Não foi possível abrir a imagem de referência: {image_path}."
+                f"Não foi possível abrir a imagem de referência: {resolved_path}."
             )
 
         gray = self.cv2.cvtColor(reference, self.cv2.COLOR_BGR2GRAY)
@@ -144,7 +194,39 @@ class WebcamOverlayApp:
 
         x, y, w, h = max(faces, key=lambda rect: rect[2] * rect[3])
         face = gray[y : y + h, x : x + w]
-        return self.cv2.resize(face, (100, 100), interpolation=self.cv2.INTER_AREA)
+        return self.cv2.resize(face, (100, 100), interpolation=self.cv2.INTER_AREA), resolved_path
+
+    def set_reference_image(self, image_path: str) -> tuple[bool, str | None]:
+        try:
+            face, resolved_path = self._load_reference_face(image_path)
+        except RuntimeError as error:
+            self.reference_face = None
+            self.reference_image_path = None
+            self.alarm.stop()
+            self.alarm_active = False
+            return False, str(error)
+
+        self.reference_face = face
+        self.reference_image_path = resolved_path
+        self.status_var.set("Referência carregada. Monitorando...")
+        return True, None
+
+    def select_reference_image(self) -> None:
+        selected_path = filedialog.askopenfilename(
+            title="Selecione a foto de referência",
+            filetypes=[
+                ("Imagens", "*.jpg *.jpeg *.png *.bmp"),
+                ("Todos os arquivos", "*.*"),
+            ],
+        )
+        if not selected_path:
+            return
+
+        loaded, error = self.set_reference_image(selected_path)
+        if loaded:
+            self.status_var.set("Referência atualizada. Monitorando...")
+        elif error:
+            messagebox.showerror("Erro na foto de referência", error)
 
     def _calculate_similarity(self, face_roi_gray) -> float:
         candidate = self.cv2.resize(face_roi_gray, (100, 100), interpolation=self.cv2.INTER_AREA)
@@ -168,45 +250,56 @@ class WebcamOverlayApp:
             frame = self.cv2.resize(frame, (self.width, self.height), interpolation=self.cv2.INTER_AREA)
             gray = self.cv2.cvtColor(frame, self.cv2.COLOR_BGR2GRAY)
 
-            faces = self.face_detector.detectMultiScale(gray, scaleFactor=1.15, minNeighbors=6)
-            best_similarity = 0.0
-            for (x, y, w, h) in faces:
-                roi_gray = gray[y : y + h, x : x + w]
-                similarity = self._calculate_similarity(roi_gray)
-                best_similarity = max(best_similarity, similarity)
-
-                color = (0, 0, 255) if similarity >= self.similarity_threshold else (255, 160, 0)
-                self.cv2.rectangle(frame, (x, y), (x + w, y + h), color, 2)
+            if self.reference_face is None:
+                self.alarm.stop()
+                self.alarm_active = False
                 self.cv2.putText(
                     frame,
-                    f"{similarity * 100:.0f}%",
-                    (x, max(20, y - 8)),
+                    "Sem referencia",
+                    (10, 30),
                     self.cv2.FONT_HERSHEY_SIMPLEX,
-                    0.6,
-                    color,
+                    0.8,
+                    (0, 255, 255),
                     2,
                 )
-
-            now = time.time()
-            has_match = best_similarity >= self.similarity_threshold
-            is_muted = now < self.alarm_muted_until
-
-            if has_match and not is_muted:
-                if not self.alarm_active:
-                    self.alarm.start()
-                    self.alarm_active = True
-                self.status_var.set(
-                    f"ALERTA! Semelhança: {best_similarity * 100:.0f}%"
-                )
             else:
-                if self.alarm_active:
-                    self.alarm.stop()
-                    self.alarm_active = False
-                if is_muted:
-                    remaining = int(self.alarm_muted_until - now)
-                    self.status_var.set(f"Alarme pausado ({remaining}s)")
+                faces = self.face_detector.detectMultiScale(gray, scaleFactor=1.15, minNeighbors=6)
+                best_similarity = 0.0
+                for (x, y, w, h) in faces:
+                    roi_gray = gray[y : y + h, x : x + w]
+                    similarity = self._calculate_similarity(roi_gray)
+                    best_similarity = max(best_similarity, similarity)
+
+                    color = (0, 0, 255) if similarity >= self.similarity_threshold else (255, 160, 0)
+                    self.cv2.rectangle(frame, (x, y), (x + w, y + h), color, 2)
+                    self.cv2.putText(
+                        frame,
+                        f"{similarity * 100:.0f}%",
+                        (x, max(20, y - 8)),
+                        self.cv2.FONT_HERSHEY_SIMPLEX,
+                        0.6,
+                        color,
+                        2,
+                    )
+
+                now = time.time()
+                has_match = best_similarity >= self.similarity_threshold
+                is_muted = now < self.alarm_muted_until
+
+                if has_match and not is_muted:
+                    if not self.alarm_active:
+                        self.alarm.start()
+                        self.alarm_active = True
+                    self.status_var.set(f"ALERTA! Semelhança: {best_similarity * 100:.0f}%")
                 else:
-                    self.status_var.set("Monitorando...")
+                    if self.alarm_active:
+                        self.alarm.stop()
+                        self.alarm_active = False
+                    if is_muted:
+                        remaining = int(self.alarm_muted_until - now)
+                        self.status_var.set(f"Alarme pausado ({remaining}s)")
+                    else:
+                        self.status_var.set("Monitorando...")
 
             frame = self.cv2.cvtColor(frame, self.cv2.COLOR_BGR2RGB)
             image = self.Image.fromarray(frame)
